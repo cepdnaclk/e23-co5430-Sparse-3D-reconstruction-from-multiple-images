@@ -45,7 +45,7 @@ Outputs land in `outputs/<feature_type>/`:
 ## Project structure
 
 ```
-Temple-SfM/
+Root/
 ├── run.py              # main entry point
 ├── sfm_baseline.py      # SfM pipeline (feature detection -> matching ->
 │                          RANSAC -> incremental registration -> BA -> export)
