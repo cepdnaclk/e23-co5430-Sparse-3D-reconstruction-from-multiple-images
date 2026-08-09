@@ -2,3 +2,4 @@ venv/**
 /datasets/**
 /outputs/**
 .vscode
+__pycache__
