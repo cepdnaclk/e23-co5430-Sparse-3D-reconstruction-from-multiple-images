@@ -7,7 +7,7 @@ Pipeline:
   2. Pairwise matching (ratio test) + RANSAC-verified essential matrix
   3. Initial pair selection (most inliers + enough parallax)
   4. Initial two-view reconstruction (recoverPose + triangulation)
-  5. Incremental registration of remaining images via 2D-3D PnP+RANSAC
+  5. Incremental registration of remaining images via 3D-3D PnP+RANSAC
   6. New point triangulation after each registration
   7. Bundle adjustment (scipy least_squares) minimizing reprojection error
 
@@ -38,6 +38,7 @@ from scipy.sparse import lil_matrix
 
 # ----------------------------- Data containers ----------------------------- #
 
+
 class Camera:
     def __init__(self, K):
         self.K = K.astype(np.float64)
@@ -47,18 +48,19 @@ class Frame:
     def __init__(self, idx, path, kp, desc, image_shape):
         self.idx = idx
         self.path = path
-        self.kp = kp                # list[cv2.KeyPoint]
-        self.desc = desc            # np.ndarray [N, 128]
-        self.shape = image_shape    # (H, W)
+        self.kp = kp  # list[cv2.KeyPoint]
+        self.desc = desc  # np.ndarray [N, 128]
+        self.shape = image_shape  # (H, W)
         self.registered = False
-        self.R = None               # world->camera rotation
-        self.t = None               # world->camera translation
+        self.R = None  # world->camera rotation
+        self.t = None  # world->camera translation
         # point3d_idx[i] = index into global points3D array if keypoint i has
         # a triangulated 3D point, else -1
         self.point3d_idx = -np.ones(len(kp), dtype=np.int64)
 
 
 # ----------------------------- Utility functions ---------------------------- #
+
 
 def load_images(folder):
     exts = ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.PNG")
@@ -79,9 +81,7 @@ def estimate_intrinsics(shape, focal_mm=None, sensor_width_mm=None):
         # standard fallback approximation (no EXIF / calibration available)
         fx = fy = max(w, h)
     cx, cy = w / 2.0, h / 2.0
-    K = np.array([[fx, 0, cx],
-                  [0, fy, cy],
-                  [0, 0, 1]], dtype=np.float64)
+    K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
     return K
 
 
@@ -131,10 +131,10 @@ def record_match_count(i, j, n):
 
 
 RUN_STATS = {
-    "n_keypoints": {},       # frame idx -> count
-    "n_matches": {},         # (i,j) -> count before RANSAC
-    "n_inliers": {},         # (i,j) -> count after RANSAC
-    "timings": {},           # stage name -> seconds
+    "n_keypoints": {},  # frame idx -> count
+    "n_matches": {},  # (i,j) -> count before RANSAC
+    "n_inliers": {},  # (i,j) -> count after RANSAC
+    "timings": {},  # stage name -> seconds
 }
 
 
@@ -169,6 +169,7 @@ def pair_parallax_score(f1, f2, inliers):
 
 # --------------------------- Two-view initialization ------------------------ #
 
+
 def triangulate_points(K, R1, t1, R2, t2, pts1, pts2):
     P1 = K @ np.hstack([R1, t1.reshape(3, 1)])
     P2 = K @ np.hstack([R2, t2.reshape(3, 1)])
@@ -198,17 +199,23 @@ def initialize_reconstruction(frames, K, matches_table, min_inliers=60):
                 continue
             inliers, E, mask = v
             parallax = pair_parallax_score(frames[i], frames[j], inliers)
-            score = len(inliers) * min(parallax, 60.0)  # cap so huge parallax alone can't win with few inliers
+            score = len(inliers) * min(
+                parallax, 60.0
+            )  # cap so huge parallax alone can't win with few inliers
             if best is None or score > best[0]:
                 best = (score, i, j, inliers, E)
 
     if best is None:
-        raise RuntimeError("Could not find a good initial pair. Try more overlap "
-                            "between images or lower min_inliers.")
+        raise RuntimeError(
+            "Could not find a good initial pair. Try more overlap "
+            "between images or lower min_inliers."
+        )
 
     _, i, j, inliers, E = best
-    print(f"[init] chosen initial pair: {os.path.basename(frames[i].path)} / "
-          f"{os.path.basename(frames[j].path)}  ({len(inliers)} inliers)")
+    print(
+        f"[init] chosen initial pair: {os.path.basename(frames[i].path)} / "
+        f"{os.path.basename(frames[j].path)}  ({len(inliers)} inliers)"
+    )
 
     pts1 = np.float32([frames[i].kp[m.queryIdx].pt for m in inliers])
     pts2 = np.float32([frames[j].kp[m.trainIdx].pt for m in inliers])
@@ -237,8 +244,10 @@ def initialize_reconstruction(frames, K, matches_table, min_inliers=60):
 
 # ------------------------------- Incremental loop ---------------------------- #
 
-def register_next_image(frame, registered_frames, matches_table, K, points3D,
-                         reproj_thresh=8.0):
+
+def register_next_image(
+    frame, registered_frames, matches_table, K, points3D, reproj_thresh=8.0
+):
     """Find 2D-3D correspondences between `frame` and already-registered frames
     (via feature matches), then solve PnP+RANSAC for its pose."""
     obj_pts, img_pts, kp_indices = [], [], []
@@ -269,8 +278,13 @@ def register_next_image(frame, registered_frames, matches_table, K, points3D,
     obj_pts = np.array(obj_pts, dtype=np.float64)
     img_pts = np.array(img_pts, dtype=np.float64)
     ok, rvec, tvec, inliers = cv2.solvePnPRansac(
-        obj_pts, img_pts, K, None,
-        reprojectionError=reproj_thresh, confidence=0.999, iterationsCount=2000
+        obj_pts,
+        img_pts,
+        K,
+        None,
+        reprojectionError=reproj_thresh,
+        confidence=0.999,
+        iterationsCount=2000,
     )
     if not ok or inliers is None or len(inliers) < 6:
         return None
@@ -315,7 +329,9 @@ def triangulate_new_points(frame, registered_frames, matches_table, K, points3D_
         pts_a = np.float32(pts_a)
         pts_b = np.float32(pts_b)
         pts3d = triangulate_points(K, rf.R, rf.t, frame.R, frame.t, pts_a, pts_b)
-        good = cheirality_mask(pts3d, rf.R, rf.t) & cheirality_mask(pts3d, frame.R, frame.t)
+        good = cheirality_mask(pts3d, rf.R, rf.t) & cheirality_mask(
+            pts3d, frame.R, frame.t
+        )
 
         for k in range(len(pts3d)):
             if not good[k]:
@@ -340,7 +356,9 @@ def run_incremental_sfm(frames, matches_table, K):
         # try to register the image with the most 2D-3D correspondences first
         best = None
         for f in remaining:
-            res = register_next_image(f, registered, matches_table, K, np.array(points3D))
+            res = register_next_image(
+                f, registered, matches_table, K, np.array(points3D)
+            )
             if res is None:
                 continue
             R, t, n_inliers = res
@@ -358,13 +376,16 @@ def run_incremental_sfm(frames, matches_table, K):
         progress = True
 
     if remaining:
-        print(f"[warn] could not register {len(remaining)} image(s): "
-              f"{[os.path.basename(f.path) for f in remaining]}")
+        print(
+            f"[warn] could not register {len(remaining)} image(s): "
+            f"{[os.path.basename(f.path) for f in remaining]}"
+        )
 
     return registered, np.array(points3D, dtype=np.float64)
 
 
 # -------------------------------- Bundle adjustment --------------------------- #
+
 
 def project(K, R, t, pts3d):
     pts_cam = (R @ pts3d.T + t.reshape(3, 1)).T
@@ -384,7 +405,7 @@ def pack_params(registered, points3D):
 
 def unpack_params(x, n_cams, n_pts):
     cam_params = x[: n_cams * 6].reshape(n_cams, 6)
-    points3D = x[n_cams * 6:].reshape(n_pts, 3)
+    points3D = x[n_cams * 6 :].reshape(n_pts, 3)
     return cam_params, points3D
 
 
@@ -442,15 +463,23 @@ def bundle_adjust(registered, points3D, K, verbose=True):
 
     if verbose:
         r0 = ba_residuals(x0, K, n_cams, n_pts, cam_idx, pt_idx, obs)
-        print(f"[BA] initial mean reprojection error: "
-              f"{np.sqrt((r0.reshape(-1,2)**2).sum(1)).mean():.3f} px "
-              f"over {len(obs)} observations")
+        print(
+            f"[BA] initial mean reprojection error: "
+            f"{np.sqrt((r0.reshape(-1, 2) ** 2).sum(1)).mean():.3f} px "
+            f"over {len(obs)} observations"
+        )
 
     sparsity = build_ba_sparsity(n_cams, n_pts, cam_idx, pt_idx)
     res = least_squares(
-        ba_residuals, x0, jac_sparsity=sparsity, verbose=2 if verbose else 0,
-        method="trf", args=(K, n_cams, n_pts, cam_idx, pt_idx, obs),
-        max_nfev=100, xtol=1e-8, ftol=1e-8
+        ba_residuals,
+        x0,
+        jac_sparsity=sparsity,
+        verbose=2 if verbose else 0,
+        method="trf",
+        args=(K, n_cams, n_pts, cam_idx, pt_idx, obs),
+        max_nfev=100,
+        xtol=1e-8,
+        ftol=1e-8,
     )
 
     cam_params, points3D_opt = unpack_params(res.x, n_cams, n_pts)
@@ -461,13 +490,16 @@ def bundle_adjust(registered, points3D, K, verbose=True):
 
     if verbose:
         r1 = ba_residuals(res.x, K, n_cams, n_pts, cam_idx, pt_idx, obs)
-        print(f"[BA] final mean reprojection error:   "
-              f"{np.sqrt((r1.reshape(-1,2)**2).sum(1)).mean():.3f} px")
+        print(
+            f"[BA] final mean reprojection error:   "
+            f"{np.sqrt((r1.reshape(-1, 2) ** 2).sum(1)).mean():.3f} px"
+        )
 
     return registered, points3D_opt
 
 
 # ---------------------------------- Export ------------------------------------ #
+
 
 def export_ply(path, points3D, colors=None):
     n = len(points3D)
@@ -490,21 +522,25 @@ def export_ply(path, points3D, colors=None):
 def export_cameras(path, registered, K):
     out = {"K": K.tolist(), "cameras": []}
     for f in registered:
-        out["cameras"].append({
-            "image": os.path.basename(f.path),
-            "R": f.R.tolist(),
-            "t": f.t.tolist(),
-        })
+        out["cameras"].append(
+            {
+                "image": os.path.basename(f.path),
+                "R": f.R.tolist(),
+                "t": f.t.tolist(),
+            }
+        )
     with open(path, "w") as fh:
         json.dump(out, fh, indent=2)
 
 
 # ------------------------------------ Main ------------------------------------- #
 
+
 def _render_worker(ply_path, png_path, cam_lines_json):
     """Runs in a subprocess so a headless-EGL segfault can't kill the main run."""
     import open3d as o3d
     import json
+
     pcd = o3d.io.read_point_cloud(ply_path)
     renderer = o3d.visualization.rendering.OffscreenRenderer(800, 600)
     mat = o3d.visualization.rendering.MaterialRecord()
@@ -512,7 +548,12 @@ def _render_worker(ply_path, png_path, cam_lines_json):
     mat.point_size = 4.0
     renderer.scene.add_geometry("pcd", pcd, mat)
     bounds = pcd.get_axis_aligned_bounding_box()
-    renderer.setup_camera(60.0, bounds, bounds.get_center())
+    center = np.asarray(bounds.get_center(), dtype=np.float32)
+    extent = np.asarray(bounds.get_extent(), dtype=np.float32)
+    diag = float(np.linalg.norm(extent)) or 1.0
+    eye = (center + np.array([1, 1, 1], dtype=np.float32) * diag).astype(np.float32)
+    up = np.array([0, 1, 0], dtype=np.float32)
+    renderer.setup_camera(60.0, center, eye, up)
     img = renderer.render_to_image()
     o3d.io.write_image(png_path, img)
 
@@ -534,15 +575,20 @@ def export_open3d(path, points3D, registered, K):
 
     try:
         import multiprocessing as mp
+
         ctx = mp.get_context("spawn")
-        p = ctx.Process(target=_render_worker, args=(path, path.replace(".ply", ".png"), None))
+        p = ctx.Process(
+            target=_render_worker, args=(path, path.replace(".ply", ".png"), None)
+        )
         p.start()
         p.join(timeout=30)
         if p.exitcode == 0:
             print(f"[open3d] wrote rendered snapshot {path.replace('.ply', '.png')}")
         else:
-            print("[open3d] snapshot render unavailable in this environment "
-                  "(no GPU display) — open the .ply locally in Open3D instead")
+            print(
+                "[open3d] snapshot render unavailable in this environment "
+                "(no GPU display) — open the .ply locally in Open3D instead"
+            )
     except Exception as e:
         print(f"[open3d] snapshot render skipped: {e}")
 
@@ -551,16 +597,22 @@ def print_metrics_summary(frames, matches_table, points3D, registered, timings):
     """Prints the exact quantitative metrics your proposal commits to."""
     print("\n=== M2 metrics summary ===")
     print(f"Images: {len(frames)}   Registered: {len(registered)}/{len(frames)}")
-    print(f"Keypoints per image: "
-          f"min={min(RUN_STATS['n_keypoints'].values())} "
-          f"max={max(RUN_STATS['n_keypoints'].values())} "
-          f"mean={np.mean(list(RUN_STATS['n_keypoints'].values())):.1f}")
+    print(
+        f"Keypoints per image: "
+        f"min={min(RUN_STATS['n_keypoints'].values())} "
+        f"max={max(RUN_STATS['n_keypoints'].values())} "
+        f"mean={np.mean(list(RUN_STATS['n_keypoints'].values())):.1f}"
+    )
     if RUN_STATS["n_matches"]:
-        print(f"Matched pairs (pre-RANSAC), mean per pair: "
-              f"{np.mean(list(RUN_STATS['n_matches'].values())):.1f}")
+        print(
+            f"Matched pairs (pre-RANSAC), mean per pair: "
+            f"{np.mean(list(RUN_STATS['n_matches'].values())):.1f}"
+        )
     if RUN_STATS["n_inliers"]:
-        print(f"RANSAC inliers, mean per verified pair: "
-              f"{np.mean(list(RUN_STATS['n_inliers'].values())):.1f}")
+        print(
+            f"RANSAC inliers, mean per verified pair: "
+            f"{np.mean(list(RUN_STATS['n_inliers'].values())):.1f}"
+        )
     print(f"Reconstructed 3D points: {len(points3D)}")
     for stage, secs in timings.items():
         print(f"Time [{stage}]: {secs:.2f}s")
@@ -582,8 +634,9 @@ def export_colmap_text(out_dir, registered, points3D, K, copy_images_to=None):
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
 
     with open(os.path.join(out_dir, "cameras.txt"), "w") as fh:
-        fh.write("# Camera list, one line per camera: "
-                  "CAMERA_ID MODEL WIDTH HEIGHT PARAMS\n")
+        fh.write(
+            "# Camera list, one line per camera: CAMERA_ID MODEL WIDTH HEIGHT PARAMS\n"
+        )
         fh.write(f"1 PINHOLE {w} {h} {fx} {fy} {cx} {cy}\n")
 
     tracks = {}
@@ -594,14 +647,17 @@ def export_colmap_text(out_dir, registered, points3D, K, copy_images_to=None):
             tracks.setdefault(int(pid), []).append((f.idx + 1, kp_i))
 
     with open(os.path.join(out_dir, "images.txt"), "w") as fh:
-        fh.write("# Image list, two lines per image: "
-                  "IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME, then POINTS2D\n")
+        fh.write(
+            "# Image list, two lines per image: "
+            "IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME, then POINTS2D\n"
+        )
         for f in registered:
             qx, qy, qz, qw = Rotation.from_matrix(f.R).as_quat()
             img_id = f.idx + 1
             name = os.path.basename(f.path)
-            fh.write(f"{img_id} {qw} {qx} {qy} {qz} "
-                      f"{f.t[0]} {f.t[1]} {f.t[2]} 1 {name}\n")
+            fh.write(
+                f"{img_id} {qw} {qx} {qy} {qz} {f.t[0]} {f.t[1]} {f.t[2]} 1 {name}\n"
+            )
             parts = []
             for kp_i, kp in enumerate(f.kp):
                 pid = f.point3d_idx[kp_i]
@@ -640,20 +696,41 @@ def export_colmap_text(out_dir, registered, points3D, K, copy_images_to=None):
     if copy_images_to:
         os.makedirs(copy_images_to, exist_ok=True)
         import shutil
+
         for f in registered:
             shutil.copy(f.path, os.path.join(copy_images_to, os.path.basename(f.path)))
 
     print(f"[colmap-export] wrote {out_dir}/{{cameras,images,points3D}}.txt")
 
 
-def run_pipeline(images, out, feature_type="orb", focal_mm=None, sensor_width_mm=None,
-                  min_inliers_init=60, export_colmap=False, K_override=None):
+def run_pipeline(
+    images,
+    out,
+    feature_type="orb",
+    focal_mm=None,
+    sensor_width_mm=None,
+    min_inliers_init=60,
+    export_colmap=False,
+    K_override=None,
+    matching_strategy="exhaustive",
+    match_window=6,
+):
     """Runs the full pipeline and returns the key objects, so other scripts
     (e.g. run.py, evaluate.py) can use it as a library instead of a CLI.
     K_override: pass a 3x3 intrinsics matrix to skip the width/height
     approximation entirely -- use this whenever the dataset ships ground
-    truth calibration (e.g. TempleRing's templeR_par.txt)."""
+    truth calibration (e.g. TempleRing's templeR_par.txt).
+    matching_strategy: "exhaustive" tests all O(n^2) pairs -- fine for small
+    unordered sets, but on a *ring*-captured dataset with repetitive texture
+    (e.g. a temple's repeated columns) it lets non-overlapping, opposite-side
+    views produce spuriously "confident" matches that poison the initial
+    pair and the whole reconstruction. "sequential" instead only matches each
+    image against its `match_window` nearest neighbours in capture order,
+    plus a wraparound for ring closure -- matches what you know about how the
+    images were actually captured, and is dramatically less prone to this
+    failure mode."""
     import time
+
     timings = {}
 
     os.makedirs(out, exist_ok=True)
@@ -673,25 +750,41 @@ def run_pipeline(images, out, feature_type="orb", focal_mm=None, sensor_width_mm
         K = estimate_intrinsics(sample_shape, focal_mm, sensor_width_mm)
         print(f"[intrinsics] estimated (no calibration supplied)\n{K}")
 
-    # exhaustive pairwise matching (fine for <=30 images; switch to sequential
-    # matching, i.e. only i,i+1 / i,i+2, if you scale up and it gets slow)
     t0 = time.time()
     matches_table = {}
     n = len(frames)
-    for i in range(n):
-        for j in range(i + 1, n):
+    if matching_strategy == "sequential":
+        pairs = set()
+        for i in range(n):
+            for d in range(1, match_window + 1):
+                j = (i + d) % n
+                pairs.add((min(i, j), max(i, j)))
+        print(
+            f"[match] sequential strategy: {len(pairs)} pairs "
+            f"(vs {n * (n - 1) // 2} for exhaustive)"
+        )
+        for i, j in sorted(pairs):
             m = match_pair(frames[i], frames[j], norm_type=norm_type)
             record_match_count(i, j, len(m))
             if len(m) >= 20:
                 matches_table[(i, j)] = m
-        print(f"[match] frame {i} vs rest done")
+    else:
+        for i in range(n):
+            for j in range(i + 1, n):
+                m = match_pair(frames[i], frames[j], norm_type=norm_type)
+                record_match_count(i, j, len(m))
+                if len(m) >= 20:
+                    matches_table[(i, j)] = m
+            print(f"[match] frame {i} vs rest done")
     timings["matching"] = time.time() - t0
 
     t0 = time.time()
     registered, points3D = run_incremental_sfm(frames, matches_table, K)
     timings["incremental_sfm"] = time.time() - t0
-    print(f"[sfm] registered {len(registered)}/{n} images, "
-          f"{len(points3D)} 3D points before BA")
+    print(
+        f"[sfm] registered {len(registered)}/{n} images, "
+        f"{len(points3D)} 3D points before BA"
+    )
 
     t0 = time.time()
     registered, points3D = bundle_adjust(registered, points3D, K)
@@ -701,34 +794,54 @@ def run_pipeline(images, out, feature_type="orb", focal_mm=None, sensor_width_mm
     export_cameras(os.path.join(out, "cameras.json"), registered, K)
     if export_colmap:
         export_colmap_text(
-            os.path.join(out, "sparse", "0"), registered, points3D, K,
+            os.path.join(out, "sparse", "0"),
+            registered,
+            points3D,
+            K,
             copy_images_to=os.path.join(out, "images"),
         )
     print_metrics_summary(frames, matches_table, points3D, registered, timings)
     export_open3d(os.path.join(out, "points3D_open3d.ply"), points3D, registered, K)
     print(f"[done] wrote outputs to {out}/")
 
-    return {"frames": frames, "registered": registered, "points3D": points3D,
-            "K": K, "timings": timings, "matches_table": matches_table}
+    return {
+        "frames": frames,
+        "registered": registered,
+        "points3D": points3D,
+        "K": K,
+        "timings": timings,
+        "matches_table": matches_table,
+    }
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--images", required=True, help="Folder of input images")
     ap.add_argument("--out", required=True, help="Output folder")
-    ap.add_argument("--feature_type", choices=["sift", "orb"], default="orb",
-                     help="orb = your proposal's baseline, sift = improved classical")
+    ap.add_argument(
+        "--feature_type",
+        choices=["sift", "orb"],
+        default="orb",
+        help="orb = your proposal's baseline, sift = improved classical",
+    )
     ap.add_argument("--focal_mm", type=float, default=None)
     ap.add_argument("--sensor_width_mm", type=float, default=None)
     ap.add_argument("--min_inliers_init", type=int, default=60)
-    ap.add_argument("--export_colmap", action="store_true",
-                     help="Also export COLMAP-format sparse/ + images/, "
-                          "ready for Gaussian Splatting training")
+    ap.add_argument(
+        "--export_colmap",
+        action="store_true",
+        help="Also export COLMAP-format sparse/ + images/, "
+        "ready for Gaussian Splatting training",
+    )
     args = ap.parse_args()
     run_pipeline(
-        images=args.images, out=args.out, feature_type=args.feature_type,
-        focal_mm=args.focal_mm, sensor_width_mm=args.sensor_width_mm,
-        min_inliers_init=args.min_inliers_init, export_colmap=args.export_colmap,
+        images=args.images,
+        out=args.out,
+        feature_type=args.feature_type,
+        focal_mm=args.focal_mm,
+        sensor_width_mm=args.sensor_width_mm,
+        min_inliers_init=args.min_inliers_init,
+        export_colmap=args.export_colmap,
     )
 
 

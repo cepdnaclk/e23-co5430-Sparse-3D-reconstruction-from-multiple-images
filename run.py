@@ -8,6 +8,7 @@ Usage:
     python run.py --feature_type sift      # improved classical variant
     python run.py --out outputs/orb_run1   # custom output folder per run
 """
+
 import argparse
 import os
 
@@ -19,12 +20,19 @@ import evaluate
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--images", default=config.IMAGES_DIR)
-    ap.add_argument("--out", default=os.path.join(config.OUTPUT_DIR, config.FEATURE_TYPE))
-    ap.add_argument("--feature_type", choices=["sift", "orb"], default=config.FEATURE_TYPE)
+    ap.add_argument(
+        "--out", default=os.path.join(config.OUTPUT_DIR, config.FEATURE_TYPE)
+    )
+    ap.add_argument(
+        "--feature_type", choices=["sift", "orb"], default=config.FEATURE_TYPE
+    )
     ap.add_argument("--gt_calibration", default=config.GT_CALIBRATION_PATH)
-    ap.add_argument("--no_gt_intrinsics", action="store_true",
-                     help="Ignore ground-truth calibration, use the width/height "
-                          "intrinsics approximation instead")
+    ap.add_argument(
+        "--no_gt_intrinsics",
+        action="store_true",
+        help="Ignore ground-truth calibration, use the width/height "
+        "intrinsics approximation instead",
+    )
     args = ap.parse_args()
 
     K_override = None
@@ -38,8 +46,10 @@ def main():
             any_K, _, _ = next(iter(gt_poses.values()))
             K_override = any_K
     else:
-        print(f"[run] no ground-truth calibration found at {args.gt_calibration} "
-              f"-- falling back to intrinsics approximation")
+        print(
+            f"[run] no ground-truth calibration found at {args.gt_calibration} "
+            f"-- falling back to intrinsics approximation"
+        )
 
     result = sfm.run_pipeline(
         images=args.images,
@@ -48,6 +58,8 @@ def main():
         min_inliers_init=config.MIN_INLIERS_INIT,
         export_colmap=config.EXPORT_COLMAP,
         K_override=K_override,
+        matching_strategy=config.MATCHING_STRATEGY,
+        match_window=config.MATCH_WINDOW,
     )
 
     if gt_poses is not None:

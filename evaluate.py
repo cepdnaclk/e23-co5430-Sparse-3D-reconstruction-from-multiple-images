@@ -10,6 +10,7 @@ ground truth directly. We first find the best-fit similarity transform
 ground-truth ones -- this is the standard approach (COLMAP, VGGSfM's own
 evaluation, etc. all do this) -- then measure the leftover error.
 """
+
 import os
 import numpy as np
 
@@ -24,7 +25,7 @@ def load_gt_poses(par_path):
     with open(par_path) as fh:
         lines = [l.strip() for l in fh if l.strip()]
     n = int(lines[0])
-    for line in lines[1:1 + n]:
+    for line in lines[1 : 1 + n]:
         parts = line.split()
         name = parts[0]
         vals = list(map(float, parts[1:]))
@@ -56,7 +57,7 @@ def umeyama_similarity(src, dst):
     D = np.diag([1, 1, d])
     R = U @ D @ Vt
 
-    var_src = (src_c ** 2).sum() / len(src)
+    var_src = (src_c**2).sum() / len(src)
     scale = np.trace(np.diag(S) @ D) / var_src if var_src > 1e-12 else 1.0
     t = dst_mean - scale * R @ src_mean
     return scale, R, t
@@ -79,14 +80,16 @@ def evaluate_poses(registered, gt_poses):
         gt_Rs.append(gt_R)
 
     if len(names) < 3:
-        print("[evaluate] fewer than 3 registered images have matching ground "
-              "truth -- can't align, skipping pose evaluation")
+        print(
+            "[evaluate] fewer than 3 registered images have matching ground "
+            "truth -- can't align, skipping pose evaluation"
+        )
         return None
 
     our_centers = np.array(our_centers)
     gt_centers = np.array(gt_centers)
     scale, R_align, t_align = umeyama_similarity(our_centers, gt_centers)
-    aligned_centers = (scale * (R_align @ our_centers.T).T + t_align)
+    aligned_centers = scale * (R_align @ our_centers.T).T + t_align
 
     pos_errors = np.linalg.norm(aligned_centers - gt_centers, axis=1)
 
@@ -101,11 +104,19 @@ def evaluate_poses(registered, gt_poses):
 
     print("\n=== Pose accuracy vs. ground truth (TempleRing calibration) ===")
     print(f"Cameras compared: {len(names)}/{len(registered)}")
-    print(f"Position error (post-alignment): "
-          f"mean={pos_errors.mean():.4f}  median={np.median(pos_errors):.4f}")
-    print(f"Rotation error (degrees):        "
-          f"mean={rot_errors_deg.mean():.3f}  median={np.median(rot_errors_deg):.3f}")
+    print(
+        f"Position error (post-alignment): "
+        f"mean={pos_errors.mean():.4f}  median={np.median(pos_errors):.4f}"
+    )
+    print(
+        f"Rotation error (degrees):        "
+        f"mean={rot_errors_deg.mean():.3f}  median={np.median(rot_errors_deg):.3f}"
+    )
     print("==================================================================\n")
 
-    return {"names": names, "position_error": pos_errors,
-            "rotation_error_deg": rot_errors_deg, "scale": scale}
+    return {
+        "names": names,
+        "position_error": pos_errors,
+        "rotation_error_deg": rot_errors_deg,
+        "scale": scale,
+    }
