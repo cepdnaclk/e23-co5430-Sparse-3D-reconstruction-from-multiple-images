@@ -31,7 +31,7 @@ def draw_keypoints(frames, out_dir):
         overlay = cv2.drawKeypoints(img, f.kp, None, color=(0, 255, 0))
         dest = os.path.join(kp_dir, f"keypoints_{f.idx}.png")
         cv2.imwrite(dest, overlay)
-        print(f"[viz] {len(f.kp)} keypoints -> {dest}")
+        # print(f"[viz] {len(f.kp)} keypoints -> {dest}")
 
 
 def _draw_matches_pair(frames, i, j, raw, K, out_dir):
@@ -55,7 +55,10 @@ def _draw_matches_pair(frames, i, j, raw, K, out_dir):
     def line_pairs(matches):
         return [
             (
-                (int(frames[i].kp[m.queryIdx].pt[0]), int(frames[i].kp[m.queryIdx].pt[1])),
+                (
+                    int(frames[i].kp[m.queryIdx].pt[0]),
+                    int(frames[i].kp[m.queryIdx].pt[1]),
+                ),
                 (
                     w1 + int(frames[j].kp[m.trainIdx].pt[0]),
                     int(frames[j].kp[m.trainIdx].pt[1]),
@@ -96,11 +99,11 @@ def _draw_matches_pair(frames, i, j, raw, K, out_dir):
         dest = os.path.join(out_dir, "matches", f"{name}{base}.png")
         cv2.imwrite(dest, img)
 
-    n_in = len(inliers)
-    print(
-        f"[viz] pair ({i},{j}): {len(raw)} raw matches / {n_in} RANSAC "
-        f"inliers -> {out_dir}/matches/"
-    )
+    # n_in = len(inliers)
+    # print(
+    #     f"[viz] pair ({i},{j}): {len(raw)} raw matches / {n_in} RANSAC "
+    #     f"inliers -> {out_dir}/matches/"
+    # )
 
 
 def draw_matches(frames, matches_table, K, out_dir, pairs=None):

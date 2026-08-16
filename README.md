@@ -133,6 +133,20 @@ python view.py outputs/sift --backend matplotlib              # interactive plot
 python view.py outputs/sift --backend matplotlib --save shot.png  # headless PNG
 ```
 
+### Viewing with MeshLab
+
+The sparse point cloud is also exported as a plain PLY, so you can open it
+in any point-cloud viewer without Open3D or a Python environment:
+
+```bash
+meshlab outputs/orb/points3D.ply          # or points3D_open3d.ply
+```
+
+Either PLY works; `points3D.ply` is ASCII (human-readable), while
+`points3D_open3d.ply` is binary (smaller). Use MeshLab's *Point Cloud /
+Delaunay* filters if you want to see meshing results on top of the sparse
+points.
+
 ### Running the pipeline standalone
 
 ```bash
