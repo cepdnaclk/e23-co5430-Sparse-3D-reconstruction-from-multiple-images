@@ -71,6 +71,7 @@ these numbers side by side — that's your core M3 comparison table.
 | Cameras compared << images registered | Filename mismatch between your images and `templeR_par.txt` entries — names must match exactly (case-sensitive) |
 | High position/rotation error | Try `--feature_type sift` (denser, more distinctive matches than ORB); check `[sfm]` log for how many images actually got registered |
 | Open3D snapshot render fails, prints an EGL error | Harmless — the `.ply` file is still written correctly; open it locally in Open3D, MeshLab, or CloudCompare. This can happen on headless machines/servers without a GPU display |
+| `view.py` prints GLFW/GLEW errors and no window opens | You're on a Wayland session and Open3D's bundled GLFW can't get an OpenGL context. `view.py` now auto-falls back to a matplotlib 3D plot; or run `python view.py outputs/orb --backend matplotlib` (interactive) / `--backend matplotlib --save out.png` (headless PNG) |
 | Bundle adjustment is slow | Expected to take longer with more points; it uses a sparse Jacobian (`build_ba_sparsity`) so it shouldn't OOM, but 47 images with dense matching can still take a few minutes |
 
 ## Stretch goal: Gaussian Splatting
