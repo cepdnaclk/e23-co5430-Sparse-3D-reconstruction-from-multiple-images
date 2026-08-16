@@ -15,6 +15,7 @@ import os
 import config
 import sfm_baseline as sfm
 import evaluate
+import viz_matches
 
 
 def main():
@@ -30,6 +31,16 @@ def main():
         action="store_true",
         help="Ignore ground-truth calibration, use the width/height "
         "intrinsics approximation instead",
+    )
+    ap.add_argument(
+        "--save_matches",
+        action="store_true",
+        help="Save keypoint + feature-match visualizations into <out>/",
+    )
+    ap.add_argument(
+        "--pairs",
+        default=None,
+        help='Only visualize these pairs, e.g. "0,1 3,4" (default: all matched pairs)',
     )
     args = ap.parse_args()
 
@@ -65,6 +76,16 @@ def main():
 
     if gt_poses is not None:
         evaluate.evaluate_poses(result["registered"], gt_poses)
+
+    if args.save_matches:
+        viz_matches.draw_keypoints(result["frames"], args.out)
+        viz_matches.draw_matches(
+            result["frames"],
+            result["matches_table"],
+            result["K"],
+            args.out,
+            pairs=args.pairs,
+        )
 
 
 if __name__ == "__main__":
