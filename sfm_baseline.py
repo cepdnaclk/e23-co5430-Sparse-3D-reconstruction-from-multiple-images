@@ -36,7 +36,7 @@ from scipy.optimize import least_squares
 from scipy.sparse import lil_matrix
 
 
-# ----------------------------- Data containers ----------------------------- #
+# Clsses
 
 
 class Camera:
@@ -48,24 +48,26 @@ class Frame:
     def __init__(self, idx, path, kp, desc, image_shape):
         self.idx = idx
         self.path = path
-        self.kp = kp  # list[cv2.KeyPoint]
-        self.desc = desc  # np.ndarray [N, 128]
+        self.kp = kp  # list[cv2.KeyPoint] keypoints array
+        self.desc = desc  # np.ndarray [N, 128] descirptors array
         self.shape = image_shape  # (H, W)
         self.registered = False
         self.R = None  # world->camera rotation
         self.t = None  # world->camera translation
+
         # point3d_idx[i] = index into global points3D array if keypoint i has
         # a triangulated 3D point, else -1
         self.point3d_idx = -np.ones(len(kp), dtype=np.int64)
 
 
-# ----------------------------- Utility functions ---------------------------- #
+# Utility functions
 
 
+# Get the paths of images
 def load_images(folder):
-    exts = ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.PNG")
+    extensions = ("*.jpg", "*.jpeg", "*.png", "*.JPG", "*.PNG")
     paths = []
-    for e in exts:
+    for e in extensions:
         paths.extend(glob.glob(os.path.join(folder, e)))
     paths = sorted(paths)
     if len(paths) < 2:
@@ -73,18 +75,22 @@ def load_images(folder):
     return paths
 
 
+# create the camera intrinsic matrix for the camera intrinsics, if not avilable, use the default approximation
+# fx and fy are the focal lengths of the camera projection expressed in pixels
 def estimate_intrinsics(shape, focal_mm=None, sensor_width_mm=None):
-    h, w = shape[:2]
+    h, w = shape[:2]  # Shape of the image
+    # convert focal length from mm to pixels using the sensor width and image width
     if focal_mm is not None and sensor_width_mm is not None:
         fx = fy = (focal_mm / sensor_width_mm) * w
     else:
-        # standard fallback approximation (no EXIF / calibration available)
+        # standard fallback approximation (no  calibration available)
         fx = fy = max(w, h)
     cx, cy = w / 2.0, h / 2.0
     K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
     return K
 
 
+# create the feature detector based on the feature type, either SIFT or ORB
 def make_detector(feature_type, max_features=4000):
     feature_type = feature_type.lower()
     if feature_type == "sift":
@@ -97,17 +103,20 @@ def make_detector(feature_type, max_features=4000):
         raise ValueError(f"Unknown feature_type '{feature_type}', use 'sift' or 'orb'")
 
 
+# detect features using opencv and the detector
 def detect_features(paths, feature_type="sift", max_features=4000):
     detector, _ = make_detector(feature_type, max_features)
     frames = []
-    for i, p in enumerate(paths):
-        img = cv2.imread(p, cv2.IMREAD_GRAYSCALE)
+    for i, path in enumerate(paths):
+        img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
         if img is None:
-            raise RuntimeError(f"Could not read image {p}")
+            raise RuntimeError(f"Could not read image {path}")
         kp, desc = detector.detectAndCompute(img, None)
-        frames.append(Frame(i, p, kp, desc, img.shape))
+        frames.append(Frame(i, path, kp, desc, img.shape))
         RUN_STATS["n_keypoints"][i] = len(kp)
-        print(f"[features:{feature_type}] {os.path.basename(p)}: {len(kp)} keypoints")
+        print(
+            f"[features:{feature_type}] {os.path.basename(path)}: {len(kp)} keypoints"
+        )
     return frames
 
 
@@ -116,6 +125,8 @@ def match_pair(f1, f2, ratio=0.75, norm_type=cv2.NORM_L2):
         return []
     bf = cv2.BFMatcher(norm_type)
     knn = bf.knnMatch(f1.desc, f2.desc, k=2)
+
+    # perform Lowe's ratio test and get the good matches
     good = []
     for pair in knn:
         if len(pair) != 2:
@@ -158,13 +169,29 @@ def geometric_verify(f1, f2, matches, K, min_inliers=30):
 
 
 def pair_parallax_score(f1, f2, inliers):
-    """Rough parallax proxy: median pixel displacement of inlier matches."""
+    """Rough parallax proxy: median pixel displacement of inlier matches.
+    Kept for reference -- no longer used to pick the initial pair, since it
+    doesn't distinguish 'lots of pixel motion' from 'lots of pixel motion
+    from a narrow, poorly-conditioned baseline'. See triangulation_angle_deg()
+    below for what replaced it."""
     d = []
     for m in inliers:
         p1 = np.array(f1.kp[m.queryIdx].pt)
         p2 = np.array(f2.kp[m.trainIdx].pt)
         d.append(np.linalg.norm(p1 - p2))
     return np.median(d) if d else 0.0
+
+
+def triangulation_angle_deg(pts3d, C1, C2):
+    """Median angle (degrees), at each 3D point, between the ray back to
+    camera 1's center and the ray back to camera 2's center -- the standard
+    measure of how well-conditioned a stereo pair is for triangulation."""
+    v1 = pts3d - C1
+    v2 = pts3d - C2
+    v1n = v1 / (np.linalg.norm(v1, axis=1, keepdims=True) + 1e-9)
+    v2n = v2 / (np.linalg.norm(v2, axis=1, keepdims=True) + 1e-9)
+    cos_ang = np.clip(np.sum(v1n * v2n, axis=1), -1, 1)
+    return np.degrees(np.median(np.arccos(cos_ang)))
 
 
 # --------------------------- Two-view initialization ------------------------ #
@@ -184,9 +211,16 @@ def cheirality_mask(pts3d, R, t):
     return pts_cam[:, 2] > 0
 
 
-def initialize_reconstruction(frames, K, matches_table, min_inliers=60):
-    """Pick the best initial pair (many inliers + good parallax) and triangulate."""
-    best = None
+def initialize_reconstruction(
+    frames, K, matches_table, min_inliers=60, min_triangulation_angle_deg=2.0
+):
+    """Pick the best initial pair and triangulate. A candidate must clear two
+    bars: enough RANSAC inliers, AND a real median triangulation angle of at
+    least min_triangulation_angle_deg -- this rejects narrow-baseline /
+    near-duplicate pairs that can rack up huge inlier counts (because the
+    images are nearly identical) while being numerically unstable to
+    triangulate from. Among pairs clearing both bars, most inliers wins."""
+    candidates = []  # (i, j, inliers, E, R, t, angle_deg)
     n = len(frames)
     for i in range(n):
         for j in range(i + 1, n):
@@ -198,36 +232,55 @@ def initialize_reconstruction(frames, K, matches_table, min_inliers=60):
             if v is None:
                 continue
             inliers, E, mask = v
-            parallax = pair_parallax_score(frames[i], frames[j], inliers)
-            score = len(inliers) * min(
-                parallax, 60.0
-            )  # cap so huge parallax alone can't win with few inliers
-            if best is None or score > best[0]:
-                best = (score, i, j, inliers, E)
 
-    if best is None:
+            pts1 = np.float32([frames[i].kp[m.queryIdx].pt for m in inliers])
+            pts2 = np.float32([frames[j].kp[m.trainIdx].pt for m in inliers])
+            _, R, t, _ = cv2.recoverPose(E, pts1, pts2, K)
+            t = t.ravel()
+
+            pts3d = triangulate_points(K, np.eye(3), np.zeros(3), R, t, pts1, pts2)
+            good = cheirality_mask(pts3d, np.eye(3), np.zeros(3)) & cheirality_mask(
+                pts3d, R, t
+            )
+            if good.sum() < min_inliers:
+                continue
+
+            C1 = np.zeros(3)
+            C2 = -R.T @ t
+            angle = triangulation_angle_deg(pts3d[good], C1, C2)
+            candidates.append((i, j, inliers, E, R, t, angle))
+
+    if not candidates:
         raise RuntimeError(
             "Could not find a good initial pair. Try more overlap "
             "between images or lower min_inliers."
         )
 
-    _, i, j, inliers, E = best
+    qualifying = [c for c in candidates if c[6] >= min_triangulation_angle_deg]
+    pool = qualifying if qualifying else candidates
+    if not qualifying:
+        print(
+            f"[init] WARNING: no candidate pair reached {min_triangulation_angle_deg}\u00b0 "
+            f"triangulation angle -- falling back to the best available. "
+            f"Reconstruction may still be poorly conditioned."
+        )
+    i, j, inliers, E, R, t, angle = max(pool, key=lambda c: len(c[2]))
+
     print(
         f"[init] chosen initial pair: {os.path.basename(frames[i].path)} / "
-        f"{os.path.basename(frames[j].path)}  ({len(inliers)} inliers)"
+        f"{os.path.basename(frames[j].path)}  ({len(inliers)} inliers, "
+        f"triangulation angle {angle:.2f}\u00b0)"
     )
-
-    pts1 = np.float32([frames[i].kp[m.queryIdx].pt for m in inliers])
-    pts2 = np.float32([frames[j].kp[m.trainIdx].pt for m in inliers])
-    _, R, t, mask_pose = cv2.recoverPose(E, pts1, pts2, K)
 
     R1 = np.eye(3)
     t1 = np.zeros(3)
     frames[i].R, frames[i].t, frames[i].registered = R1, t1, True
-    frames[j].R, frames[j].t, frames[j].registered = R, t.ravel(), True
+    frames[j].R, frames[j].t, frames[j].registered = R, t, True
 
-    pts3d = triangulate_points(K, R1, t1, R, t.ravel(), pts1, pts2)
-    good = cheirality_mask(pts3d, R1, t1) & cheirality_mask(pts3d, R, t.ravel())
+    pts1 = np.float32([frames[i].kp[m.queryIdx].pt for m in inliers])
+    pts2 = np.float32([frames[j].kp[m.trainIdx].pt for m in inliers])
+    pts3d = triangulate_points(K, R1, t1, R, t, pts1, pts2)
+    good = cheirality_mask(pts3d, R1, t1) & cheirality_mask(pts3d, R, t)
 
     points3D = []
     for k, m in enumerate(inliers):
@@ -246,10 +299,21 @@ def initialize_reconstruction(frames, K, matches_table, min_inliers=60):
 
 
 def register_next_image(
-    frame, registered_frames, matches_table, K, points3D, reproj_thresh=8.0
+    frame,
+    registered_frames,
+    matches_table,
+    K,
+    points3D,
+    reproj_thresh=8.0,
+    min_pnp_inliers=30,
 ):
     """Find 2D-3D correspondences between `frame` and already-registered frames
-    (via feature matches), then solve PnP+RANSAC for its pose."""
+    (via feature matches), then solve PnP+RANSAC for its pose.
+    min_pnp_inliers is a real reliability bar, not the mathematical minimum
+    PnP needs (6) -- accepting a registration at 6-8 inliers means trusting a
+    pose with essentially no redundancy, and bundle adjustment then treats
+    that unreliable pose as equally trustworthy as a 1000-inlier one, which
+    can drag the whole joint optimization off course."""
     obj_pts, img_pts, kp_indices = [], [], []
     seen_point_ids = set()
 
@@ -286,7 +350,7 @@ def register_next_image(
         confidence=0.999,
         iterationsCount=2000,
     )
-    if not ok or inliers is None or len(inliers) < 6:
+    if not ok or inliers is None or len(inliers) < min_pnp_inliers:
         return None
 
     R, _ = cv2.Rodrigues(rvec)
@@ -344,7 +408,7 @@ def triangulate_new_points(frame, registered_frames, matches_table, K, points3D_
     return new_count
 
 
-def run_incremental_sfm(frames, matches_table, K):
+def run_incremental_sfm(frames, matches_table, K, min_pnp_inliers=30):
     i0, j0, points3D = initialize_reconstruction(frames, K, matches_table)
     points3D = list(points3D)
     registered = [frames[i0], frames[j0]]
@@ -357,7 +421,12 @@ def run_incremental_sfm(frames, matches_table, K):
         best = None
         for f in remaining:
             res = register_next_image(
-                f, registered, matches_table, K, np.array(points3D)
+                f,
+                registered,
+                matches_table,
+                K,
+                np.array(points3D),
+                min_pnp_inliers=min_pnp_inliers,
             )
             if res is None:
                 continue
@@ -822,7 +891,7 @@ def main():
         "--feature_type",
         choices=["sift", "orb"],
         default="orb",
-        help="orb = your proposal's baseline, sift = improved classical",
+        help="orb = baseline, sift = improved classical",
     )
     ap.add_argument("--focal_mm", type=float, default=None)
     ap.add_argument("--sensor_width_mm", type=float, default=None)

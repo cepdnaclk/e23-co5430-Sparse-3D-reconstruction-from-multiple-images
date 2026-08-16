@@ -20,9 +20,7 @@ import evaluate
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--images", default=config.IMAGES_DIR)
-    ap.add_argument(
-        "--out", default=os.path.join(config.OUTPUT_DIR, config.FEATURE_TYPE)
-    )
+    ap.add_argument("--out", default=None)
     ap.add_argument(
         "--feature_type", choices=["sift", "orb"], default=config.FEATURE_TYPE
     )
@@ -34,6 +32,9 @@ def main():
         "intrinsics approximation instead",
     )
     args = ap.parse_args()
+
+    if args.out is None:
+        args.out = os.path.join(config.OUTPUT_DIR, args.feature_type)
 
     K_override = None
     gt_poses = None
