@@ -120,6 +120,38 @@ def detect_features(paths, feature_type="sift", max_features=4000):
     return frames
 
 
+def match_all(frames, norm_type, matching_strategy="exhaustive", match_window=6):
+    """Match every frame pair according to the strategy and return
+    matches_table {(i, j): [DMatch, ...]} (i < j), keeping only pairs with
+    >= 20 matches -- identical logic to what run_pipeline uses."""
+    matches_table = {}
+    n = len(frames)
+    if matching_strategy == "sequential":
+        pairs = set()
+        for i in range(n):
+            for d in range(1, match_window + 1):
+                j = (i + d) % n
+                pairs.add((min(i, j), max(i, j)))
+        print(
+            f"[match] sequential strategy: {len(pairs)} pairs "
+            f"(vs {n * (n - 1) // 2} for exhaustive)"
+        )
+        for i, j in sorted(pairs):
+            m = match_pair(frames[i], frames[j], norm_type=norm_type)
+            record_match_count(i, j, len(m))
+            if len(m) >= 20:
+                matches_table[(i, j)] = m
+    else:
+        for i in range(n):
+            for j in range(i + 1, n):
+                m = match_pair(frames[i], frames[j], norm_type=norm_type)
+                record_match_count(i, j, len(m))
+                if len(m) >= 20:
+                    matches_table[(i, j)] = m
+            print(f"[match] frame {i} vs rest done")
+    return matches_table
+
+
 def match_pair(f1, f2, ratio=0.75, norm_type=cv2.NORM_L2):
     if f1.desc is None or f2.desc is None or len(f1.desc) < 8 or len(f2.desc) < 8:
         return []
@@ -820,33 +852,10 @@ def run_pipeline(
         print(f"[intrinsics] estimated (no calibration supplied)\n{K}")
 
     t0 = time.time()
-    matches_table = {}
-    n = len(frames)
-    if matching_strategy == "sequential":
-        pairs = set()
-        for i in range(n):
-            for d in range(1, match_window + 1):
-                j = (i + d) % n
-                pairs.add((min(i, j), max(i, j)))
-        print(
-            f"[match] sequential strategy: {len(pairs)} pairs "
-            f"(vs {n * (n - 1) // 2} for exhaustive)"
-        )
-        for i, j in sorted(pairs):
-            m = match_pair(frames[i], frames[j], norm_type=norm_type)
-            record_match_count(i, j, len(m))
-            if len(m) >= 20:
-                matches_table[(i, j)] = m
-    else:
-        for i in range(n):
-            for j in range(i + 1, n):
-                m = match_pair(frames[i], frames[j], norm_type=norm_type)
-                record_match_count(i, j, len(m))
-                if len(m) >= 20:
-                    matches_table[(i, j)] = m
-            print(f"[match] frame {i} vs rest done")
+    matches_table = match_all(frames, norm_type, matching_strategy, match_window)
     timings["matching"] = time.time() - t0
 
+    n = len(frames)
     t0 = time.time()
     registered, points3D = run_incremental_sfm(frames, matches_table, K)
     timings["incremental_sfm"] = time.time() - t0
