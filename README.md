@@ -92,14 +92,18 @@ Results land in `outputs/<feature_type>/`:
 
 ### 3D reconstruction
 
-Interactive Open3D viewer showing the point cloud and recovered camera
-frustums (rotate/pan/zoom with the mouse):
+Render the point cloud plus recovered camera frustums to PNGs (a turntable of
+views) using Open3D's offscreen renderer. Works on headless machines and
+Wayland+NVIDIA setups where the interactive windowed viewer fails:
 
 ```bash
 python view.py outputs/sift
 ```
 
-MeshLab (if installed) also opens the point cloud directly:
+Writes `points3D_view_*.png` into the results folder (add `--angles 12` for
+more views, `--out elsewhere` to redirect).
+
+For interactive exploration, open the `.ply` in MeshLab:
 
 ```bash
 meshlab outputs/sift/points3D.ply
@@ -139,7 +143,7 @@ Root/
 │                          incremental registration -> BA -> export)
 ├── evaluate.py          # ground-truth pose loading + accuracy scoring
 ├── viz_matches.py       # keypoint + feature-match visualization tool
-├── view.py              # interactive 3D viewer (point cloud + camera poses)
+├── view.py              # offscreen 3D renderer (point cloud + camera poses)
 ├── config.py            # parameters
 ├── requirements.txt
 ├── data/index.json      # team data
