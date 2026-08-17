@@ -394,10 +394,21 @@ def register_next_image(
     return R, tvec.ravel(), len(inliers)
 
 
-def triangulate_new_points(frame, registered_frames, matches_table, K, points3D_list):
+def triangulate_new_points(
+    frame, registered_frames, matches_table, K, points3D_list, min_point_angle_deg=3.0
+):
     """After registering `frame`, triangulate new points against each already
-    registered neighbor for keypoints that don't yet have a 3D point."""
+    registered neighbor for keypoints that don't yet have a 3D point.
+    min_point_angle_deg filters individual points by triangulation angle, not
+    just cheirality -- cheirality only checks a point is in FRONT of both
+    cameras, it says nothing about whether the two viewing rays actually
+    cross at a well-conditioned angle. Without this, points seen by two
+    nearly-parallel rays (e.g. two very similar adjacent viewpoints) get
+    accepted with huge, noisy depth even when both cameras' poses are
+    accurate -- this is a per-point version of the same issue the initial
+    pair's angle gate addresses at the pair level."""
     new_count = 0
+    rejected_angle = 0
     for rf in registered_frames:
         if rf.idx == frame.idx:
             continue
@@ -429,14 +440,25 @@ def triangulate_new_points(frame, registered_frames, matches_table, K, points3D_
             pts3d, frame.R, frame.t
         )
 
+        Ca = -rf.R.T @ rf.t
+        Cb = -frame.R.T @ frame.t
         for k in range(len(pts3d)):
             if not good[k]:
+                continue
+            angle = triangulation_angle_deg(pts3d[k : k + 1], Ca, Cb)
+            if angle < min_point_angle_deg:
+                rejected_angle += 1
                 continue
             pid = len(points3D_list)
             points3D_list.append(pts3d[k])
             rf.point3d_idx[idx_a[k]] = pid
             frame.point3d_idx[idx_b[k]] = pid
             new_count += 1
+    if rejected_angle:
+        print(
+            f"[triangulate]   (rejected {rejected_angle} points below "
+            f"{min_point_angle_deg}\u00b0 triangulation angle)"
+        )
     return new_count
 
 
