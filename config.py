@@ -27,3 +27,13 @@ MATCH_WINDOW = 6
 # calibration is available for a dataset
 FOCAL_MM = None
 SENSOR_WIDTH_MM = None
+
+# --- SuperPoint + LightGlue deep pipeline (lightglue_sfm.py) ---------------
+# These only affect lightglue_sfm.py -- sfm_baseline.py never reads this
+# file, so nothing here touches the classical ORB/SIFT pipeline.
+LIGHTGLUE_MAX_KEYPOINTS = 2048  # SuperPoint keypoints per image
+LIGHTGLUE_MIN_CONFIDENCE = 0.0  # extra match-confidence bar; 0.0 = off
+# (LightGlue already filters internally)
+LIGHTGLUE_MIN_PNP_INLIERS = 30  # mirrors the classical pipeline's validated
+# incremental-registration reliability bar
+LIGHTGLUE_DEVICE = "auto"  # "auto" picks CUDA if available, else CPU
