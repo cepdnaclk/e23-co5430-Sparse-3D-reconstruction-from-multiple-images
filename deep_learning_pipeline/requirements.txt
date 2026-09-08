@@ -1,0 +1,13 @@
+# Core SfM stack: SuperPoint + LightGlue for correspondences,
+# hloc to glue them to a COLMAP database, pycolmap for incremental
+# mapping + bundle adjustment.
+torch>=2.0
+torchvision>=0.15
+numpy<2.0
+opencv-python
+h5py
+tqdm
+pycolmap>=0.6.1
+
+# Optional, only needed for pipeline/visualize.py
+open3d
