@@ -3,3 +3,4 @@ venv/**
 /outputs/**
 .vscode
 __pycache__
+Hierarchical-Localization
