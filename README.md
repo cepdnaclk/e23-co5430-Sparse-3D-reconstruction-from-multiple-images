@@ -139,8 +139,17 @@ Useful flags: `--pairs "0,1 1,2"` (only render specific pairs),
 ```
 Root/
 ├── run.py              # main entry point (wires pipeline + evaluation)
-├── sfm_baseline.py      # SfM pipeline (detection -> matching -> RANSAC ->
-│                          incremental registration -> BA -> export)
+├── sfm_baseline.py      # Backward-compatible facade for the classical pipeline
+├── sfm/                 # Modular classical SfM implementation
+│   ├── image_io.py      # Image discovery and camera intrinsics
+│   ├── features.py      # Feature detection and matching
+│   ├── geometry.py      # Epipolar geometry and triangulation
+│   ├── reconstruction.py # Initialization and incremental registration
+│   ├── bundle_adjustment.py # Sparse joint pose/point refinement
+│   ├── exporters.py     # PLY, camera JSON, and COLMAP output
+│   ├── visualization.py # Open3D export and snapshot rendering
+│   ├── reporting.py     # Runtime statistics and M2 metrics
+│   └── pipeline.py      # End-to-end orchestration
 ├── evaluate.py          # ground-truth pose loading + accuracy scoring
 ├── viz_matches.py       # keypoint + feature-match visualization tool
 ├── view.py              # offscreen 3D renderer (point cloud + camera poses)
