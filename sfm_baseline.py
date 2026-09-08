@@ -69,7 +69,9 @@ def load_images(folder):
     paths = []
     for e in extensions:
         paths.extend(glob.glob(os.path.join(folder, e)))
-    paths = sorted(paths)
+    paths = sorted(
+        {os.path.normcase(os.path.abspath(p)): p for p in paths}.values()
+    )
     if len(paths) < 2:
         raise RuntimeError(f"Need >=2 images in {folder}, found {len(paths)}")
     return paths
