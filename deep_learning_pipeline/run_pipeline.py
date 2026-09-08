@@ -58,38 +58,51 @@ def main():
     images = get_image_list(dataset_dir, cfg.IMAGE_GLOB)
     print(f"[1/5] Found {len(images)} images in {dataset_dir}")
 
+    import time as _time
+
+    timings = {}
+
     # ---- 1. Feature extraction (SuperPoint) -----------------------------
     feature_conf = extract_features.confs[cfg.FEATURE_CONF]
     if args.skip_existing and features_path.exists():
         print(f"[2/5] Reusing existing features at {features_path}")
+        timings["feature_detection"] = 0.0
     else:
         print(f"[2/5] Extracting SuperPoint features ({cfg.FEATURE_CONF})")
+        _t0 = _time.time()
         extract_features.main(
             feature_conf,
             dataset_dir,
             image_list=images,
             feature_path=features_path,
         )
+        timings["feature_detection"] = _time.time() - _t0
 
     # ---- 2. Pair generation ---------------------------------------------
     print("[3/5] Building exhaustive pair list")
+    _t0 = _time.time()
     pairs_from_exhaustive.main(pairs_path, image_list=images)
+    timings["pair_generation"] = _time.time() - _t0
 
     # ---- 3. Matching (LightGlue) -----------------------------------------
     matcher_conf = match_features.confs[cfg.MATCHER_CONF]
     if args.skip_existing and matches_path.exists():
         print(f"[4/5] Reusing existing matches at {matches_path}")
+        timings["matching"] = 0.0
     else:
         print(f"[4/5] Matching pairs with LightGlue ({cfg.MATCHER_CONF})")
+        _t0 = _time.time()
         match_features.main(
             matcher_conf,
             pairs_path,
             features=features_path,
             matches=matches_path,
         )
+        timings["matching"] = _time.time() - _t0
 
     # ---- 4. Incremental SfM + bundle adjustment (pycolmap via hloc) -----
     print("[5/5] Running incremental mapping (pycolmap) + bundle adjustment")
+    _t0 = _time.time()
     model = hloc_reconstruction.main(
         sfm_dir=sfm_dir,
         image_dir=dataset_dir,
@@ -99,6 +112,7 @@ def main():
         camera_mode=pycolmap.CameraMode.SINGLE,  # one shared camera for the sequence
         image_options={"camera_model": cfg.CAMERA_MODEL},
     )
+    timings["incremental_sfm"] = _time.time() - _t0
 
     if model is None:
         sys.exit(
@@ -117,6 +131,50 @@ def main():
     print(f"Exported sparse point cloud -> {ply_path}")
     print(f"Exported camera poses       -> {poses_path}")
     print(f"Full COLMAP model (bin)     -> {sfm_dir}")
+
+    # ---- 6. Unified evaluation (M2 + pose) — duplicated separate impl ----
+    # Keep evaluation separate but identical output contract (Option A).
+    try:
+        from .evaluate import print_m2_summary as _print_m2
+        from .evaluate import (
+            compute_feature_metrics_from_h5 as _feat_metrics,
+            compute_structure_metrics_from_model as _struct_metrics,
+            evaluate_poses as _eval_poses,
+            load_gt_poses as _load_gt,
+        )
+
+        # Use default TempleRing GT if present (mirrors classical run.py)
+        _gt_candidates = [
+            dataset_dir.parent / "templeR_par.txt",
+            Path("datasets/templeRing/templeR_par.txt"),
+            Path(cfg.DATASET_DIR).parent.parent / "templeR_par.txt",
+        ]
+        _gt_path = None
+        for _cand in _gt_candidates:
+            if _cand.exists():
+                _gt_path = _cand
+                break
+
+        fm = _feat_metrics(features_path, matches_path)
+        _n_images = fm.pop("n_images", len(images))
+        sm = _struct_metrics(sfm_dir)
+        _n_reg = sm.get("num_registered", len(model.images) if hasattr(model, "images") else 0)
+        _print_m2(_n_images, _n_reg, fm, sm, timings)
+
+        if _gt_path is not None:
+            try:
+                _gt = _load_gt(str(_gt_path))
+                # load rotations from model
+                _reg = {}
+                for _img in model.images.values():
+                    _R = _img.cam_from_world().rotation.matrix()
+                    _t = __import__("numpy").array(_img.cam_from_world().translation)
+                    _reg[_img.name] = (_R, _t)
+                _eval_poses(_reg, _gt)
+            except Exception as _e:
+                print(f"[evaluate] pose evaluation skipped: {_e}")
+    except Exception as _e:
+        print(f"[evaluate] unified evaluation skipped: {_e}")
 
 
 if __name__ == "__main__":

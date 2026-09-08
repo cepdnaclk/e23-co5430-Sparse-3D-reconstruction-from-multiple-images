@@ -718,27 +718,94 @@ def export_open3d(path, points3D, registered, K):
         print(f"[open3d] snapshot render skipped: {e}")
 
 
-def print_metrics_summary(frames, matches_table, points3D, registered, timings):
-    """Prints the exact quantitative metrics your proposal commits to."""
+def print_metrics_summary(frames, matches_table, points3D, registered, timings, K=None):
+    """Prints M2 metrics summary — duplicated implementation to match deep pipeline
+    evaluate.py output contract exactly (Option A). Headers, field order, and
+    numeric precision must stay in sync with deep_learning_pipeline/evaluate.py::print_m2_summary
+    and evaluate.py::print_m2_summary."""
+    # --- feature metrics (classical RUN_STATS) ---
+    if RUN_STATS["n_keypoints"]:
+        kp_min = min(RUN_STATS["n_keypoints"].values())
+        kp_max = max(RUN_STATS["n_keypoints"].values())
+        kp_mean = float(np.mean(list(RUN_STATS["n_keypoints"].values())))
+    elif frames:
+        kps = [len(f.kp) for f in frames]
+        kp_min, kp_max = int(min(kps)), int(max(kps))
+        kp_mean = float(np.mean(kps))
+    else:
+        kp_min = kp_max = 0
+        kp_mean = 0.0
+
+    if RUN_STATS["n_matches"]:
+        matches_mean = float(np.mean(list(RUN_STATS["n_matches"].values())))
+    elif matches_table:
+        counts = [len(v) for v in matches_table.values()]
+        matches_mean = float(np.mean(counts)) if counts else 0.0
+    else:
+        matches_mean = 0.0
+
+    if RUN_STATS["n_inliers"]:
+        inliers_mean = float(np.mean(list(RUN_STATS["n_inliers"].values())))
+    else:
+        inliers_mean = 0.0
+
+    # --- structure metrics (duplicated from evaluate.py::compute_structure_metrics) ---
+    n_points = len(points3D) if points3D is not None else 0
+    n_obs = 0
+    point_obs_counts = {}
+    obs_per_image = []
+    for f in registered:
+        cnt = int(np.sum(f.point3d_idx != -1))
+        obs_per_image.append(cnt)
+        n_obs += cnt
+        for pid in f.point3d_idx:
+            if pid != -1:
+                pid = int(pid)
+                point_obs_counts[pid] = point_obs_counts.get(pid, 0) + 1
+    if point_obs_counts:
+        mean_track = float(np.mean(list(point_obs_counts.values())))
+    else:
+        mean_track = 0.0
+    mean_obs_per_image = float(np.mean(obs_per_image)) if obs_per_image else 0.0
+
+    # mean reprojection error (duplicated projection logic)
+    mean_reproj = 0.0
+    if K is not None and n_obs > 0 and points3D is not None and len(points3D) > 0:
+        errors = []
+        for f in registered:
+            valid = f.point3d_idx != -1
+            if not np.any(valid):
+                continue
+            pids = f.point3d_idx[valid]
+            mask = pids < len(points3D)
+            if not np.any(mask):
+                continue
+            pids = pids[mask]
+            pts3d = points3D[pids]
+            kp_idx = np.where(valid)[0][mask]
+            obs = np.array([f.kp[i].pt for i in kp_idx], dtype=np.float64)
+            # project without cv2
+            pts_cam = (f.R @ pts3d.T + f.t.reshape(3, 1)).T
+            z = pts_cam[:, 2:3]
+            z = np.where(np.abs(z) < 1e-9, 1e-9, z)
+            proj = (K @ pts_cam.T).T
+            proj = proj[:, :2] / proj[:, 2:3]
+            err = np.linalg.norm(proj - obs, axis=1)
+            errors.extend(err.tolist())
+        if errors:
+            mean_reproj = float(np.mean(errors))
+
+    # --- identical print contract ---
     print("\n=== M2 metrics summary ===")
     print(f"Images: {len(frames)}   Registered: {len(registered)}/{len(frames)}")
-    print(
-        f"Keypoints per image: "
-        f"min={min(RUN_STATS['n_keypoints'].values())} "
-        f"max={max(RUN_STATS['n_keypoints'].values())} "
-        f"mean={np.mean(list(RUN_STATS['n_keypoints'].values())):.1f}"
-    )
-    if RUN_STATS["n_matches"]:
-        print(
-            f"Matched pairs (pre-RANSAC), mean per pair: "
-            f"{np.mean(list(RUN_STATS['n_matches'].values())):.1f}"
-        )
-    if RUN_STATS["n_inliers"]:
-        print(
-            f"RANSAC inliers, mean per verified pair: "
-            f"{np.mean(list(RUN_STATS['n_inliers'].values())):.1f}"
-        )
-    print(f"Reconstructed 3D points: {len(points3D)}")
+    print(f"Keypoints per image: min={kp_min} max={kp_max} mean={kp_mean:.1f}")
+    print(f"Matched pairs (pre-RANSAC), mean per pair: {matches_mean:.1f}")
+    print(f"RANSAC inliers, mean per verified pair: {inliers_mean:.1f}")
+    print(f"Reconstructed 3D points: {n_points}")
+    print(f"Num observations: {n_obs}")
+    print(f"Mean track length: {mean_track:.2f}")
+    print(f"Mean observations per image: {mean_obs_per_image:.2f}")
+    print(f"Mean reprojection error: {mean_reproj:.3f} px")
     for stage, secs in timings.items():
         print(f"Time [{stage}]: {secs:.2f}s")
     print("===========================\n")
@@ -902,7 +969,7 @@ def run_pipeline(
             K,
             copy_images_to=os.path.join(out, "images"),
         )
-    print_metrics_summary(frames, matches_table, points3D, registered, timings)
+    print_metrics_summary(frames, matches_table, points3D, registered, timings, K)
     export_open3d(os.path.join(out, "points3D_open3d.ply"), points3D, registered, K)
     print(f"[done] wrote outputs to {out}/")
 

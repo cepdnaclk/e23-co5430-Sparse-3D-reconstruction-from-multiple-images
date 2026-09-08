@@ -9,6 +9,13 @@ ground truth directly. We first find the best-fit similarity transform
 (rotation + translation + uniform scale) that maps your cameras onto the
 ground-truth ones -- this is the standard approach (COLMAP, VGGSfM's own
 evaluation, etc. all do this) -- then measure the leftover error.
+
+This file (classical pipeline) is a SEPARATED implementation from
+deep_learning_pipeline/evaluate.py — duplicated logic, identical output
+contract (Option A). Both files must print the same M2 / pose sections
+with the same headers, formatting, and numeric precision, but they
+derive metrics from different reconstruction representations
+(Frame list + RUN_STATS vs pycolmap.Reconstruction + h5).
 """
 
 import os
@@ -155,7 +162,7 @@ def evaluate_poses(registered, gt_poses):
     print(f"Cameras compared: {len(names)}/{len(registered)}")
     print(
         f"Position error (post-alignment): "
-        f"mean={pos_errors.mean():.4f}  median={np.median(pos_errors):.4f}"
+        f"mean={pos_errors.mean():.4f}  median={np.median(pos_errors):.4f}  max={pos_errors.max():.4f}"
     )
     print(
         f"Rotation error, absolute/aligned (degrees): "
@@ -180,5 +187,220 @@ def evaluate_poses(registered, gt_poses):
         "position_error": pos_errors,
         "rotation_error_deg": rot_errors_deg,
         "relative_rotation_error_median": rel_median,
+        "relative_rotation_error_mean": rel_mean,
         "scale": scale,
+        "position_error_mean": float(pos_errors.mean()),
+        "position_error_median": float(np.median(pos_errors)),
+        "position_error_max": float(pos_errors.max()),
+        "rotation_error_mean": float(rot_errors_deg.mean()),
+        "rotation_error_median": float(np.median(rot_errors_deg)),
+        "num_compared": len(names),
+        "num_registered": len(registered),
+    }
+
+
+# ---------------------------------------------------------------------------
+# M2 / structure metrics — duplicated logic (Option A) to match
+# deep_learning_pipeline/evaluate.py output contract exactly.
+# ---------------------------------------------------------------------------
+
+def _project(K, R, t, pts3d):
+    """Project 3D points to 2D using K,R,t (world->camera)."""
+    pts_cam = (R @ pts3d.T + t.reshape(3, 1)).T
+    # avoid division by zero
+    z = pts_cam[:, 2:3]
+    z = np.where(np.abs(z) < 1e-9, 1e-9, z)
+    proj = (K @ pts_cam.T).T
+    proj = proj[:, :2] / proj[:, 2:3]
+    return proj
+
+
+def compute_structure_metrics(registered, points3D, K, matches_table=None, frames=None):
+    """Compute COLMAP-style structure metrics from classical Frame representation.
+
+    Duplicated implementation (Option A) — same numeric results as
+    deep_learning_pipeline/evaluate.py but derived from Frame.point3d_idx
+    rather than pycolmap.Reconstruction.
+
+    Returns dict with:
+      num_points3D, num_observations, mean_track_length,
+      mean_observations_per_image, mean_reprojection_error
+    """
+    n_points = len(points3D) if points3D is not None else 0
+    # observations = total assigned keypoint->3D associations
+    n_obs = 0
+    track_lengths = []
+    obs_per_image = []
+
+    # Build point -> observation count via per-point accumulation
+    # For classical we can count via frames' point3d_idx
+    point_obs_counts = {}
+    for f in registered:
+        cnt = int(np.sum(f.point3d_idx != -1))
+        obs_per_image.append(cnt)
+        n_obs += cnt
+        for pid in f.point3d_idx:
+            if pid != -1:
+                pid = int(pid)
+                point_obs_counts[pid] = point_obs_counts.get(pid, 0) + 1
+
+    if point_obs_counts:
+        track_lengths = list(point_obs_counts.values())
+        mean_track = float(np.mean(track_lengths))
+    else:
+        mean_track = 0.0
+
+    mean_obs_per_image = float(np.mean(obs_per_image)) if obs_per_image else 0.0
+
+    # mean reprojection error: average over all observations
+    mean_reproj = 0.0
+    if K is not None and n_obs > 0 and points3D is not None and len(points3D) > 0:
+        errors = []
+        for f in registered:
+            valid = f.point3d_idx != -1
+            if not np.any(valid):
+                continue
+            pids = f.point3d_idx[valid]
+            # filter pids that are within points3D range
+            mask = pids < len(points3D)
+            if not np.any(mask):
+                continue
+            pids = pids[mask]
+            pts3d = points3D[pids]
+            # keypoints
+            kp_idx = np.where(valid)[0][mask]
+            obs = np.array([f.kp[i].pt for i in kp_idx], dtype=np.float64)
+            proj = _project(K, f.R, f.t, pts3d)
+            err = np.linalg.norm(proj - obs, axis=1)
+            errors.extend(err.tolist())
+        if errors:
+            mean_reproj = float(np.mean(errors))
+
+    return {
+        "num_points3D": int(n_points),
+        "num_observations": int(n_obs),
+        "mean_track_length": float(mean_track),
+        "mean_observations_per_image": float(mean_obs_per_image),
+        "mean_reprojection_error": float(mean_reproj),
+    }
+
+
+def compute_feature_metrics(frames, matches_table=None, inliers_dict=None):
+    """Compute feature/matching stats for M2 summary (classical side)."""
+    if frames is None or len(frames) == 0:
+        return {
+            "keypoints_min": 0,
+            "keypoints_max": 0,
+            "keypoints_mean": 0.0,
+            "matches_mean": 0.0,
+            "inliers_mean": 0.0,
+            "num_matches_pairs": 0,
+            "num_inliers_pairs": 0,
+        }
+    kps = [len(f.kp) for f in frames]
+    kp_min = int(min(kps)) if kps else 0
+    kp_max = int(max(kps)) if kps else 0
+    kp_mean = float(np.mean(kps)) if kps else 0.0
+
+    matches_mean = 0.0
+    num_matches_pairs = 0
+    if matches_table is not None and len(matches_table) > 0:
+        vals = list(matches_table.values())
+        # matches_table stores list of DMatch
+        counts = [len(v) for v in vals]
+        if counts:
+            matches_mean = float(np.mean(counts))
+            num_matches_pairs = len(counts)
+    elif inliers_dict is not None and len(inliers_dict) > 0:
+        # fallback if only inliers available
+        pass
+
+    inliers_mean = 0.0
+    num_inliers_pairs = 0
+    if inliers_dict is not None and len(inliers_dict) > 0:
+        counts = list(inliers_dict.values())
+        if counts:
+            inliers_mean = float(np.mean(counts))
+            num_inliers_pairs = len(counts)
+
+    return {
+        "keypoints_min": kp_min,
+        "keypoints_max": kp_max,
+        "keypoints_mean": kp_mean,
+        "matches_mean": matches_mean,
+        "inliers_mean": inliers_mean,
+        "num_matches_pairs": num_matches_pairs,
+        "num_inliers_pairs": num_inliers_pairs,
+    }
+
+
+def print_m2_summary(
+    n_images,
+    n_registered,
+    feature_metrics,
+    structure_metrics,
+    timings=None,
+):
+    """Print M2 metrics summary with IDENTICAL format to deep pipeline.
+
+    This function is duplicated in deep_learning_pipeline/evaluate.py (Option A).
+    Headers, field order, and numeric precision must stay in sync.
+    """
+    fm = feature_metrics
+    sm = structure_metrics
+    print("\n=== M2 metrics summary ===")
+    print(f"Images: {n_images}   Registered: {n_registered}/{n_images}")
+    print(
+        f"Keypoints per image: min={fm['keypoints_min']} max={fm['keypoints_max']} mean={fm['keypoints_mean']:.1f}"
+    )
+    print(f"Matched pairs (pre-RANSAC), mean per pair: {fm['matches_mean']:.1f}")
+    print(f"RANSAC inliers, mean per verified pair: {fm['inliers_mean']:.1f}")
+    print(f"Reconstructed 3D points: {sm['num_points3D']}")
+    print(f"Num observations: {sm['num_observations']}")
+    print(f"Mean track length: {sm['mean_track_length']:.2f}")
+    print(f"Mean observations per image: {sm['mean_observations_per_image']:.2f}")
+    print(f"Mean reprojection error: {sm['mean_reprojection_error']:.3f} px")
+    if timings:
+        for stage, secs in timings.items():
+            print(f"Time [{stage}]: {secs:.2f}s")
+    print("===========================\n")
+
+
+def evaluate_reconstruction(
+    frames,
+    registered,
+    points3D,
+    K,
+    gt_poses,
+    matches_table=None,
+    inliers_dict=None,
+    timings=None,
+):
+    """Unified entry point: prints M2 summary + pose accuracy with identical contract.
+
+    Kept separated from deep pipeline's equivalent function (Option A).
+    """
+    n_images = len(frames) if frames is not None else len(registered)
+    n_registered = len(registered)
+
+    feature_metrics = compute_feature_metrics(frames, matches_table, inliers_dict)
+    structure_metrics = compute_structure_metrics(registered, points3D, K)
+
+    print_m2_summary(n_images, n_registered, feature_metrics, structure_metrics, timings)
+
+    pose_result = None
+    if gt_poses is not None:
+        pose_result = evaluate_poses(registered, gt_poses)
+    else:
+        print("[evaluate] no ground truth provided — skipping pose evaluation\n")
+
+    return {
+        "m2": {
+            "n_images": n_images,
+            "n_registered": n_registered,
+            **feature_metrics,
+            **structure_metrics,
+            "timings": timings or {},
+        },
+        "pose": pose_result,
     }
