@@ -1,6 +1,10 @@
 venv/**
+gaussian_splatting/data/
+gaussian_splatting/**/results/
 /datasets/**
 /outputs/**
 .vscode
 __pycache__
-Hierarchical-Localization
+Hierachical-Localization/**
+gaussian_splatting/data/
+Hierarchical-Localization/
