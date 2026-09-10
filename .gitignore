@@ -3,6 +3,7 @@ gaussian_splatting/data/
 gaussian_splatting/**/results/
 /datasets/**
 /outputs/**
+/.pytest_cache
 .vscode
 __pycache__
 Hierachical-Localization/**
