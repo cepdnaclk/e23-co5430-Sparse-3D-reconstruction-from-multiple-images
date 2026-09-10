@@ -1,8 +1,25 @@
-# Gaussian Splatting (gsplat) on our COLMAP outputs
+# 3D Gaussian Splatting on the repo's COLMAP outputs
 
-Trains a 3D Gaussian Splatting model from the repo's SfM results using
-[gsplat](https://docs.gsplat.studio/). The design target is **Google Colab
-(free T4, 16 GB VRAM)** — the full plan lives in `docs/GaussianSplattingPlan.md`.
+This folder is the **stretch-goal / downstream-rendering** part of the
+project. It takes a COLMAP model produced by either SfM pipeline in this
+repo (classical `run.py` or deep-learning `deep_learning_pipeline/`) and
+trains a 3D Gaussian Splatting model from it using
+[gsplat](https://docs.gsplat.studio/).
+
+The design target is **Google Colab (free T4, 16 GB VRAM)**. The full plan
+lives in `docs/GaussianSplattingPlan.md`.
+
+## Where the COLMAP model comes from
+
+Either pipeline can feed Gaussian Splatting:
+
+- **Deep-learning pipeline** (`deep_learning_pipeline/`) is the recommended
+  source: run `python -m deep_learning_pipeline.run_pipeline`, then use
+  `outputs/lightglue/sparse` (47/47 images registered).
+- **Classical pipeline** (`run.py --feature_type sift`) also exports a
+  COLMAP model to `outputs/sift/sparse/0/` when `EXPORT_COLMAP=True` in
+  `config.py`. The ORB result (`outputs/orb/`) only registers 8/47 poses,
+  so it makes a much weaker splat.
 
 ## Pipeline at a glance
 
@@ -20,6 +37,8 @@ results/temple/  →  ckpt .pt + eval PSNR/SSIM + turntable video + PLY
 
 ## 1. Build the dataset (local machine)
 
+From the repo root:
+
 ```bash
 python gaussian_splatting/prepare_dataset.py \
     --sparse outputs/lightglue/sparse \
@@ -27,11 +46,12 @@ python gaussian_splatting/prepare_dataset.py \
 cd gaussian_splatting/data && zip -qr temple_colmap.zip temple
 ```
 
-`prepare_dataset.py` copies the COLMAP model (`sparse/0/`) and the 47 registered
+`prepare_dataset.py` copies the COLMAP model (`sparse/0/`) and the registered
 images under the exact names stored in the model, prints a summary
-(47/47 images, 3,785 points, SIMPLE_RADIAL 640×480), and refuses to continue if
-any referenced image is missing. To instead splat the classical ORB result
-(**only 8/47 poses — much weaker**):
+(e.g. 47/47 images, a few thousand points, SIMPLE_RADIAL 640×480), and
+refuses to continue if any referenced image is missing on disk.
+
+To instead splat the classical ORB result (**only 8/47 poses — much weaker**):
 
 ```bash
 python gaussian_splatting/prepare_dataset.py \
@@ -60,13 +80,10 @@ smoke test, run the trainer once with `--max_steps 3000` first.
 ## 2b. Alternative: train on a GPU server (no Colab)
 
 If you have SSH access to a machine with an NVIDIA GPU, use
-`gaussian_splatting/train_server.sh` — a self-contained, idempotent script that
-mirrors `gaussian_splatting.ipynb` (original Inria `graphdeco-inria/gaussian-splatting`:
-`train.py` / `render.py` / `metrics.py`). It creates a venv, installs torch +
-the CUDA rasterizer extensions, extracts the dataset zip, undistorts with
-OpenCV in pure Python when the camera model needs it (our Temple model is
-`SIMPLE_RADIAL`; no sudo or COLMAP install required), trains with `--eval`, renders test views, computes metrics,
-and stitches a turntable video from the renders with ffmpeg:
+`gaussian_splatting/train_server.sh` — a self-contained, idempotent script
+that mirrors the Colab notebook using the original Inria implementation
+(`graphdeco-inria/gaussian-splatting`: `train.py` / `render.py` /
+`metrics.py`).
 
 ```bash
 # from the repo:
@@ -100,10 +117,21 @@ test renders, `metrics.txt`, `turntable_<iters>.mp4`); fetch with `scp -r`.
 python gaussian_splatting/export_ply.py temple_ckpts/ckpt_29999_rank0.pt temple_splats.ply
 ```
 
+## Comparing Gaussian Splatting across SfM methods
+
+The natural extension of this stretch goal: train once per upstream SfM
+method (ORB, SIFT, SuperPoint+LightGlue) and compare final render quality
+(PSNR/SSIM on held-out views). That answers *does the upstream SfM method's
+accuracy affect the downstream renderable reconstruction?*
+
+To do that, prepare a separate dataset for each method with
+`prepare_dataset.py` (different `--sparse` / `--images` / `--out`), zip each
+one, and train them one at a time on Colab or the server.
+
 ## Notes
 
 - Our model uses COLMAP `SIMPLE_RADIAL` — gsplat handles it natively and
   undistorts images at load time (expect a "Camera is not PINHOLE" warning).
 - No conversion or re-estimation of poses/intrinsics is done anywhere: the
-  LightGlue/pycolmap reconstruction is used as-is.
+  reconstruction from the chosen SfM pipeline is used as-is.
 - `data_factor 1` because TempleRing images are already small (640×480).

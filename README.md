@@ -11,14 +11,24 @@ Sparse 3D reconstruction from multiple images.
 | W.G.R.P. Gamage | E/23/108 | e23108@eng.pdn.ac.lk |
 | C.M.H.K. Chandrasekara | E/23/043 | e23043@eng.pdn.ac.lk |
 
-Team data also lives in `data/index.json` (single source of truth).
-
 ## Problem statement
 
 Given a set of overlapping images of a scene, recover the camera pose for
-each image and a sparse 3D point cloud of the scene, using classical
-feature based Structure from Motion. See `docs/UserGuide.md` for the full
-pipeline explanation and `datasets/templeRing/README.txt` for dataset details.
+each image and a sparse 3D point cloud of the scene, using Structure from
+Motion. This repo ships two independent pipelines that solve the same task
+and can be compared side-by-side:
+
+- **Classical feature-based SfM** (`run.py`, `sfm/`) — ORB (baseline) or
+  SIFT (improved classical), brute-force matching, RANSAC geometric
+  verification, incremental reconstruction, and sparse bundle adjustment.
+- **Deep-learning-based SfM** (`deep_learning_pipeline/`) — SuperPoint
+  features, LightGlue matching, and incremental reconstruction + bundle
+  adjustment via `pycolmap` (through `hloc`).
+
+Both pipelines output a sparse point cloud and camera poses, and both print
+an identical M2/pose evaluation summary so the two methods can be compared
+directly. See `docs/UserGuide.md` for the detailed pipeline explanation and
+`datasets/templeRing/README.txt` for dataset details.
 
 ## Pipeline overview
 
@@ -138,7 +148,7 @@ Useful flags: `--pairs "0,1 1,2"` (only render specific pairs),
 
 ```
 Root/
-├── run.py              # main entry point (wires pipeline + evaluation)
+├── run.py              # main entry point (wires classical pipeline + evaluation)
 ├── sfm_baseline.py      # Backward-compatible facade for the classical pipeline
 ├── sfm/                 # Modular classical SfM implementation
 │   ├── image_io.py      # Image discovery and camera intrinsics
@@ -149,15 +159,33 @@ Root/
 │   ├── exporters.py     # PLY, camera JSON, and COLMAP output
 │   ├── visualization.py # Open3D export and snapshot rendering
 │   ├── reporting.py     # Runtime statistics and M2 metrics
-│   └── pipeline.py      # End-to-end orchestration
-├── evaluate.py          # ground-truth pose loading + accuracy scoring
+│   ├── pipeline.py      # End-to-end orchestration
+│   ├── cli.py           # Shared CLI entry point
+│   └── __init__.py      # Public API re-export
+├── evaluate.py          # ground-truth pose loading + M2/pose scoring
 ├── viz_matches.py       # keypoint + feature-match visualization tool
 ├── view.py              # offscreen 3D renderer (point cloud + camera poses)
 ├── config.py            # parameters
-├── requirements.txt
-├── data/index.json      # team data
+├── requirements.txt    # shared deps for classical + deep pipeline
+├── data/index.json      # team data (single source of truth)
 ├── datasets/templeRing/ # calibration + image folder (images gitignored)
 ├── outputs/             # per-run results (gitignored)
+├── deep_learning_pipeline/ # SuperPoint + LightGlue + pycolmap pipeline
+│   ├── run_pipeline.py  # extract → match → incremental mapping → export
+│   ├── config.py        # dataset/feature/matcher config
+│   ├── export_results.py # pycolmap → PLY + poses.txt
+│   ├── visualize.py     # Open3D viewer for the sparse model
+│   ├── evaluate.py      # M2 + pose evaluation (duplicated contract)
+│   └── requirements.txt # extra deps only needed here
+├── Hierarchical-Localization/ # hloc (SuperPoint+LightGlue → COLMAP glue)
+│   └── install as editable: `cd Hierarchical-Localization && pip install -e .`
+├── gaussian_splatting/  # 3D Gaussian Splatting on COLMAP outputs
+│   ├── README.md        # dataset prep + Colab/server training guide
+│   ├── prepare_dataset.py # SfM output → gsplat COLMAP layout
+│   ├── export_ply.py    # gsplat checkpoint → 3DGS PLY
+│   ├── train_server.sh  # idempotent GPU-server training script
+│   ├── gsplat_colab.ipynb # Colab walkthrough
+│   └── data/            # prepared temple/ dataset (gitignored)
 └── docs/UserGuide.md    # detailed pipeline + troubleshooting guide
 ```
 
@@ -165,4 +193,6 @@ Root/
 
 - `docs/UserGuide.md` — full pipeline explanation, reading the ground-truth
   evaluation, and troubleshooting
+- `deep_learning_pipeline/README.md` — SuperPoint + LightGlue + pycolmap pipeline
+- `gaussian_splatting/README.md` — 3D Gaussian Splatting on the SfM outputs
 - `datasets/templeRing/README.txt` — dataset details
