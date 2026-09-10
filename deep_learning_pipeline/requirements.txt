@@ -11,3 +11,12 @@ pycolmap>=0.6.1
 
 # Optional, only needed for pipeline/visualize.py
 open3d
+
+# ---------------------------------------------------------------------------
+# hloc install note (see deep_learning_pipeline/README.md, section 1):
+#   cd Hierarchical-Localization && pip install -e .
+# installs hloc + its requirements (including lightglue from cvg/LightGlue
+# and pycolmap>=3.13.0). This file intentionally keeps the repo's base deps
+# so the classical pipeline stays lightweight; the deep pipeline gets the
+# rest from the editable hloc install.
+# ---------------------------------------------------------------------------

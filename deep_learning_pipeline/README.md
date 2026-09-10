@@ -1,16 +1,17 @@
-# Temple Ring SfM: SuperPoint + LightGlue + pycolmap
+# Deep-learning SfM: SuperPoint + LightGlue + pycolmap
 
-Full structure-from-motion pipeline for the Middlebury **Temple Ring**
-dataset: SuperPoint features, LightGlue matching, incremental
-reconstruction (poses + sparse point cloud) and bundle adjustment via
-COLMAP's own solver, driven through `pycolmap` and Google/ETH's `hloc`
-toolbox (which already implements the SuperPoint+LightGlue -> COLMAP
-database -> `pycolmap.incremental_mapping` glue code, so we don't have to
-hand-roll database import / geometric verification ourselves).
+This folder is the **deep-learning pipeline** for the Temple Ring dataset.
+It reconstructs camera poses and a sparse 3D point cloud using SuperPoint
+features, LightGlue matching, and incremental reconstruction + bundle
+adjustment via `pycolmap` (through `hloc`).
+
+It solves the same task as the classical pipeline in the repo root
+(`run.py` with ORB or SIFT) so the two can be compared side-by-side using
+the identical M2/pose evaluation summary both print.
 
 ## Why hloc instead of a from-scratch OpenCV pipeline
 
-You asked for pycolmap as the backend. Getting LightGlue's matches into a
+We use `pycolmap` as the SfM backend. Getting LightGlue's matches into a
 COLMAP database correctly (feature import, match import, two-view geometry
 verification) is finicky and easy to get subtly wrong. `hloc` is the
 reference implementation for exactly this combination (from the LightGlue /
@@ -21,10 +22,28 @@ Everything downstream (mapping, bundle adjustment, model access) is
 
 ## 1. Setup
 
+From the repo root:
+
 ```bash
 python -m venv venv && source venv/bin/activate   # or use conda
 pip install -r requirements.txt
 ```
+
+The deep-learning pipeline depends on `hloc`, the reference
+SuperPoint+LightGlue-to-COLMAP glue code. The repo's copy lives in
+`Hierarchical-Localization/` and should be installed as an editable module
+so the pipeline can import it:
+
+```bash
+# from the repo root, after the venv is active:
+cd Hierarchical-Localization && pip install -e .
+```
+
+`setup.py` pulls in `hloc`'s own `requirements.txt`, which includes
+`lightglue` (installed directly from the `cvg/LightGlue` repo) and a newer
+`pycolmap>=3.13.0`. If you already installed the repo's
+`requirements.txt` (`pycolmap>=0.6.1`, no `lightglue`), the editable install
+will bring the deep pipeline's exact deps into the same venv.
 
 Notes:
 - Works on CPU, but SuperPoint+LightGlue extraction/matching will be much
@@ -32,6 +51,11 @@ Notes:
   fall back to CPU automatically.
 - `pycolmap` ships prebuilt wheels for Linux/macOS/Windows, so you don't
   need a separate COLMAP install.
+- The `Hierarchical-Localization` folder is a git submodule-like third-party
+  checkout (it has its own `.gitmodules` with `d2-net`,
+  `SuperGluePretrainedNetwork`, `deep-image-retrieval`, `r2d2`). Only
+  `hloc` is needed for this pipeline; the other third-party folders are
+  unused unless you run the repo's own Aachen/InLoc pipelines.
 
 ## 2. Get the dataset onto disk
 
@@ -40,33 +64,46 @@ Download the Temple Ring set (47 images, `templeR0001.png` ...
 images in a folder, e.g.:
 
 ```
-data/templeRing/templeR0001.png
-data/templeRing/templeR0002.png
+datasets/templeRing/templeR0001.png
+datasets/templeRing/templeR0002.png
 ...
-data/templeRing/temple_par.txt   # optional, ground-truth calibration
+datasets/templeRing/temple_par.txt   # optional, ground-truth calibration
 ```
 
-Update `pipeline/config.py` if your path or file extension differs
-(`DATASET_DIR`, `IMAGE_GLOB`).
+The default `deep_learning_pipeline/config.py` already points at
+`datasets/templeRing/images/`. Update it if your path or file extension
+differs (`DATASET_DIR`, `IMAGE_GLOB`).
 
 ## 3. Run the pipeline
 
+From the repo root:
+
 ```bash
+python -m deep_learning_pipeline.run_pipeline
+```
+
+Or from inside the folder:
+
+```bash
+cd deep_learning_pipeline
 python -m pipeline.run_pipeline
 ```
 
 This will, in order:
-1. Extract SuperPoint keypoints/descriptors for every image (`superpoint_max` config — no resize cap, suited to a small, detailed dataset).
-2. Build an exhaustive pair list (47 images -> 1081 pairs is cheap; fine for this dataset size).
+1. Extract SuperPoint keypoints/descriptors for every image
+   (`superpoint_max` config — no resize cap, suited to a small, detailed
+   dataset).
+2. Build an exhaustive pair list (47 images → 1081 pairs is cheap; fine for
+   this dataset size).
 3. Match every pair with LightGlue.
 4. Build a COLMAP database, import the features/matches, run
    `pycolmap.incremental_mapping` (incremental SfM: initial pair, PnP
    registration of remaining images, triangulation, and bundle adjustment
    after each step plus a final global BA).
 5. Export `points3D.ply` (sparse cloud) and `poses.txt` (per-image camera
-   pose) into `outputs/templeRing/`. The full binary COLMAP model
+   pose) into `outputs/lightglue/`. The full binary COLMAP model
    (`cameras.bin`, `images.bin`, `points3D.bin`) is left in
-   `outputs/templeRing/sparse/` if you want to open it in COLMAP's GUI or
+   `outputs/lightglue/sparse/` if you want to open it in COLMAP's GUI or
    load it with `pycolmap.Reconstruction(...)` for further analysis.
 
 Re-running with `--skip-existing` reuses cached features/matches from disk
@@ -76,7 +113,7 @@ different options).
 ## 4. Inspect the result
 
 ```bash
-python -m pipeline.visualize --sfm-dir outputs/templeRing/sparse
+python -m deep_learning_pipeline.visualize --sfm-dir outputs/lightglue/sparse
 ```
 
 Opens an Open3D window with the colored sparse point cloud and a small red
@@ -87,14 +124,41 @@ wireframe frustum per registered camera.
 Temple Ring ships known camera calibration in `temple_par.txt`. Since
 COLMAP reconstructs up to an arbitrary similarity transform (unknown scale/
 rotation/translation — monocular SfM cannot recover absolute scale),
-`pipeline/evaluate.py` aligns the recovered camera centers to the ground
-truth with a Umeyama similarity fit and reports the residual error:
+`deep_learning_pipeline/evaluate.py` aligns the recovered camera poses to the
+ground truth with a Umeyama similarity fit and reports the residual error:
 
 ```bash
-python -m pipeline.evaluate \
-    --gt data/templeRing/temple_par.txt \
-    --poses outputs/templeRing/poses.txt
+python -m deep_learning_pipeline.evaluate \
+    --gt datasets/templeRing/templeR_par.txt \
+    --poses outputs/lightglue/poses.txt
 ```
+
+You can also point it at the sparse model directly; it will read poses and
+rotation from the `pycolmap.Reconstruction`:
+
+```bash
+python -m deep_learning_pipeline.evaluate \
+    --gt datasets/templeRing/templeR_par.txt \
+    --sparse outputs/lightglue/sparse
+```
+
+## Comparing the two pipelines
+
+Both the classical pipeline (`run.py`) and this deep-learning pipeline print
+an identical M2 + pose evaluation summary. To compare them:
+
+```bash
+# classical
+python run.py --feature_type sift
+
+# deep-learning
+python -m deep_learning_pipeline.run_pipeline
+```
+
+Then put the `M2 metrics summary` and `Pose accuracy vs. ground truth`
+sections side by side. The deep-learning pipeline's output lands in
+`outputs/lightglue/`; the classical one lands in `outputs/sift/` or
+`outputs/orb/` depending on the feature type.
 
 ## Assumptions made
 
@@ -122,8 +186,9 @@ python -m pipeline.evaluate \
 
 | File | Purpose |
 |---|---|
-| `pipeline/config.py` | Paths and hyperparameters — edit `DATASET_DIR` here |
-| `pipeline/run_pipeline.py` | End-to-end driver: extract -> pair -> match -> map -> export |
-| `pipeline/export_results.py` | Write `pycolmap.Reconstruction` to PLY + text poses |
-| `pipeline/visualize.py` | Open3D viewer for the sparse cloud + camera frustums |
-| `pipeline/evaluate.py` | Align + compare recovered poses to `temple_par.txt` ground truth |
+| `config.py` | Paths and hyperparameters — edit `DATASET_DIR` here |
+| `run_pipeline.py` | End-to-end driver: extract → pair → match → map → export |
+| `export_results.py` | Write `pycolmap.Reconstruction` to PLY + text poses |
+| `visualize.py` | Open3D viewer for the sparse cloud + camera frustums |
+| `evaluate.py` | Align + compare recovered poses to `temple_par.txt` ground truth |
+| `requirements.txt` | Extra deps only needed for this pipeline |
